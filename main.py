@@ -116,7 +116,7 @@ def execute_oanda_forex(signal):
                 "type": "MARKET",
                 "instrument": signal["symbol"],
                 "units": str(order_units),
-                "timeInForce": "FOC",
+                "timeInForce": "FOK",
                 "takeProfitOnFill": {"price": str(signal["tp1"])},
                 "stopLossOnFill": {"price": str(signal["stop"])}
             }
