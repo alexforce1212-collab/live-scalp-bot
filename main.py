@@ -57,7 +57,11 @@ def calc_forex(pair, price):
     if not price: return None
     mom=random.uniform(0.001,0.008); conf=70+mom*500+random.uniform(0,4)
     if conf<70: return None
-    entry=round(price,5); stop=round(entry*0.998,5); tp1=round(entry*1.002,5); tp2=round(entry*1.004,5)
+    entry=round(price,5)
+    # Wider TP/SL to avoid OANDA instant cancel: 0.4% = 40 pips for EUR/USD
+    stop=round(entry*0.996,5) if "JPY" not in pair else round(entry*0.996,3)
+    tp1=round(entry*1.008,5) if "JPY" not in pair else round(entry*1.008,3)
+    tp2=round(entry*1.015,5) if "JPY" not in pair else round(entry*1.015,3)
     return {"symbol":pair,"direction":"LONG","market":"forex","pattern":"Forex Breakout + Momentum","entry":entry,"stop":stop,"tp1":tp1,"tp2":tp2,"risk_reward":2.0,"confidence":round(min(conf,88),1),"vwap":round(price*0.999,5),"momentum":round(mom,4),"timeframe":"5m forex","timestamp":datetime.utcnow().isoformat()+"Z","live":True}
 
 def execute_alpaca_order(signal):
