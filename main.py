@@ -23,7 +23,6 @@ def full_health():
     alpaca_key = os.getenv("ALPACA_API_KEY")
     if alpaca_key:
         try:
-            # Real test call - Alpaca data
             r = requests.get("https://data.alpaca.markets/v2/stocks/AAPL/quotes/latest", 
                              headers={"APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY"), "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY")},
                              timeout=5)
@@ -33,28 +32,20 @@ def full_health():
     else:
         results["alpaca"] = {"configured": False, "reachable": False}
 
-    # Test Binance.US
-    binance_key = os.getenv("BINANCEUS_API_KEY")
-    if binance_key:
-        try:
-            r = requests.get("https://api.binance.us/api/v3/ticker/price?symbol=BTCUSD", timeout=5)
-            price = r.json().get("price") if r.status_code==200 else None
-            results["binance_us"] = {"configured": True, "reachable": r.status_code==200, "live_price_BTCUSD": price}
-        except Exception as e:
-            results["binance_us"] = {"configured": True, "reachable": False, "error": str(e)}
-    else:
-        # Public endpoint still testable without key for price feed
-        try:
-            r = requests.get("https://api.binance.us/api/v3/ticker/price?symbol=BTCUSD", timeout=5)
-            results["binance_us"] = {"configured": False, "reachable": r.status_code==200, "live_price_BTCUSD": r.json().get("price") if r.status_code==200 else None, "note": "Add API key for private data, public price works"}
-        except Exception as e:
-            results["binance_us"] = {"configured": False, "reachable": False, "error": str(e)}
+    # Test Binance.US public price (works without key)
+    try:
+        r = requests.get("https://api.binance.us/api/v3/ticker/price?symbol=BTCUSD", timeout=5)
+        price = r.json().get("price") if r.status_code==200 else None
+        results["binance_us"] = {"configured": bool(os.getenv("BINANCEUS_API_KEY")), "reachable": r.status_code==200, "live_price_BTCUSD": price, "note": "Public price works, add API key for private data"}
+    except Exception as e:
+        results["binance_us"] = {"configured": False, "reachable": False, "error": str(e)}
 
     results["agents"] = agents_status
     results["mode"] = "LIVE ONLY - NO MOCK"
+    results["check_time"] = time.time()
     return results
 
 @app.get("/api/signals")
 def signals():
     # Real signals only when keys present - NEVER mock
-    return {"signals": [], "message": "Live scan active when API keys set. No mock data generated."}
+    return {"signals": [], "message": "Live scan active when API keys set. No mock data generated.", "mode": "real-only"}
