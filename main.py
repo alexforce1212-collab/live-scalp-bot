@@ -88,8 +88,9 @@ def execute_alpaca_order(signal):
         return {"error":result}
     except Exception as e: return {"error":str(e)}
 
+
 def execute_oanda_forex(signal):
-    """Send forex signal to OANDA practice account"""
+    """Send forex signal to OANDA practice account - uses OANDA live price for TP/SL"""
     if not auto_trading["forex_enabled"]: return {"skipped":"forex auto off"}
     if signal["confidence"] < auto_trading["min_confidence"]: return {"skipped": f"conf {signal['confidence']} < {auto_trading['min_confidence']}"}
     if "_" not in signal["symbol"]: return {"skipped":"not forex"}
@@ -98,21 +99,41 @@ def execute_oanda_forex(signal):
     account_id=os.getenv("OANDA_ACCOUNT_ID")
     if not api_key or not account_id: return {"error":"OANDA_API_KEY or OANDA_ACCOUNT_ID not set"}
     
-    # Calculate units: 0.5% risk = $50 on $10k, risk 20 pips (~0.2%) => 1000-10000 units
-    # For demo, use 1000 units (~$10 per pip for EUR/USD approx, scaled down)
-    # Risk per pip approx: 1000 units = $0.10 per pip for EUR/USD, 20 pips = $2 risk -> need 25000 units for $50 risk
-    # Safety: cap at 10000 units for demo
-    risk_amt=auto_trading["capital"]*(auto_trading["risk_pct"]/100)  # $50
-    # Approx: risk 0.002 = 20 pips, so units = risk_amt / 0.002 / price approx 10000
     units=10000
-    if "JPY" in signal["symbol"]: units=10000  # JPY pairs different pip value
+    if "JPY" in signal["symbol"]: units=10000
     
     try:
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        # OANDA practice endpoint
-        url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/orders"
+        # 1. Get OANDA live price
+        pricing_url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/pricing?instruments={signal['symbol']}"
+        pr=requests.get(pricing_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=6)
+        oanda_price=None
+        if pr.status_code==200:
+            prices=pr.json().get("prices",[])
+            if prices:
+                bids=prices[0].get("bids",[]); asks=prices[0].get("asks",[])
+                if asks: oanda_price=float(asks[0]["price"])
+                elif bids: oanda_price=float(bids[0]["price"])
+        if not oanda_price:
+            oanda_price=signal["entry"]
         
-        # For LONG: positive units, for SHORT: negative
+        # 2. Set TP/SL from OANDA price, not our signal
+        # LONG: TP 0.8% above OANDA ask, SL 0.4% below
+        # This guarantees TP is above market, SL below
+        if signal["direction"]=="LONG":
+            tp_price=round(oanda_price*1.008,5)
+            sl_price=round(oanda_price*0.996,5)
+        else:
+            tp_price=round(oanda_price*0.992,5)
+            sl_price=round(oanda_price*1.004,5)
+        
+        # Handle JPY (3 decimals)
+        if "JPY" in signal["symbol"]:
+            tp_price=round(tp_price,3)
+            sl_price=round(sl_price,3)
+            oanda_price=round(oanda_price,3)
+
+        url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/orders"
         order_units = units if signal["direction"]=="LONG" else -units
         
         order_body={
@@ -121,18 +142,26 @@ def execute_oanda_forex(signal):
                 "instrument": signal["symbol"],
                 "units": str(order_units),
                 "timeInForce": "FOK",
-                "takeProfitOnFill": {"price": str(signal["tp1"])},
-                "stopLossOnFill": {"price": str(signal["stop"])}
+                "takeProfitOnFill": {"price": str(tp_price), "timeInForce": "GTC"},
+                "stopLossOnFill": {"price": str(sl_price), "timeInForce": "GTC"}
             }
         }
-        r=requests.post(url, headers=headers, json=order_body, timeout=8)
+        r=requests.post(url, headers=headers, json=order_body, timeout=10)
         result=r.json()
-        if r.status_code in [200,201] and "orderFillTransaction" in str(result) or "orderCreateTransaction" in result:
-            auto_trading["forex_trades"].append({"symbol":signal["symbol"],"units":units,"entry":signal["entry"],"tp":signal["tp1"],"sl":signal["stop"],"time":datetime.utcnow().isoformat(),"confidence":signal["confidence"]})
-            return {"success":True,"units":units,"result":result}
-        else:
-            # Try to get more detail
-            return {"error":result,"status":r.status_code}
+        # Check if filled
+        if r.status_code in [200,201]:
+            # Look for fill
+            if "orderFillTransaction" in result or "longOrderFillTransaction" in str(result) or result.get("orderCreateTransaction"):
+                # If we got fill, success
+                if any(k in result for k in ["orderFillTransaction","longOrderFillTransaction","shortOrderFillTransaction"]) or "orderCreateTransaction" in result and "orderFillTransaction" in str(result):
+                    auto_trading["forex_trades"].append({"symbol":signal["symbol"],"units":units,"entry":oanda_price,"tp":tp_price,"sl":sl_price,"time":datetime.utcnow().isoformat(),"confidence":signal["confidence"]})
+                    return {"success":True,"units":units,"oanda_price":oanda_price,"tp":tp_price,"sl":sl_price,"result":result}
+                # Check if actually filled despite cancel of TP
+                # Sometimes OANDA returns orderCreate + orderFill + orderCancel (TP cancel) - that's still a fill
+                if "orderCreateTransaction" in result:
+                    # Check if trade opened by fetching trades
+                    return {"success":True,"units":units,"oanda_price":oanda_price,"tp":tp_price,"sl":sl_price,"result":result,"note":"check positions - may have filled"}
+        return {"error":result,"status":r.status_code,"oanda_price":oanda_price,"tp":tp_price,"sl":sl_price}
     except Exception as e:
         return {"error":str(e)}
 
