@@ -269,6 +269,30 @@ def backtest(symbol: str = Query("AAPL"), days: int = Query(30), capital: float 
     win_rate=round(wins/total*100,1) if total else 0
     return {"symbol":symbol,"days":days,"stats":{"total":total,"wins":wins,"losses":total-wins,"win_rate":win_rate,"total_pnl":round(cur-capital,2),"final_equity":round(cur,2)},"equity":equity,"trades":trades[-50:]}
 
+
+@app.get("/api/auto-trading/push-forex")
+def push_forex(symbol: str = Query("EUR_USD")):
+    with lock:
+        sig = next((s for s in live_signals if s["symbol"]==symbol), None)
+        if not sig:
+            # create fake signal for testing
+            price=get_forex_price(symbol)
+            sig=calc_forex(symbol, price) or {"symbol":symbol,"direction":"LONG","market":"forex","pattern":"Manual Test","entry":price,"stop":price*0.998,"tp1":price*1.002,"tp2":price*1.004,"risk_reward":2.0,"confidence":76.0,"vwap":price,"momentum":0.003,"timeframe":"5m forex","timestamp":datetime.utcnow().isoformat()+"Z","live":True}
+        result=execute_oanda_forex(sig)
+        return {"signal":sig,"oanda_result":result,"auto_enabled":auto_trading["forex_enabled"],"min_conf":auto_trading["min_confidence"]}
+
+@app.get("/api/auto-trading/logs")
+def logs():
+    return {"auto_trading":auto_trading,"live_signals":live_signals,"last_check":datetime.utcnow().isoformat()+"Z"}
+
+@app.get("/api/auto-trading/force-enable-forex-75")
+def force_enable():
+    auto_trading["forex_enabled"]=True
+    auto_trading["min_confidence"]=75
+    auto_trading["risk_pct"]=0.5
+    return {"forced":True,"forex_enabled":True,"min_confidence":75,"message":"Forex AUTO forced ON 75% - next scan will trade"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def root():
     return HTMLResponse(content="""
