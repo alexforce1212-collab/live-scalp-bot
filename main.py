@@ -33,9 +33,9 @@ scan_symbols = ["AAPL","NVDA","QQQ","AMD","META","GOOGL","TSLA","SPY"]
 forex_symbols = ["EUR_USD","GBP_USD","USD_JPY","AUD_USD","GBP_JPY","AUD_USD"]
 
 auto_trading = {
-    "stocks_enabled": False,
-    "forex_enabled": False,
-    "min_confidence": 80,
+    "stocks_enabled":True,
+    "forex_enabled":True,
+    "min_confidence":70,
     "risk_pct": 0.5,
     "capital": 10000,
     "stocks_trades": [],
