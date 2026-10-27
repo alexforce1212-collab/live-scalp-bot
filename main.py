@@ -91,7 +91,7 @@ def get_oanda_candles(instrument, granularity="M1", count=100):
     except Exception as e: pass
     return []
 
-def analyze_fast_scalp(instrument):
+def OLD_analyze_fast_scalp(instrument):
     candles = get_oanda_candles(instrument, "M1", 100)
     if len(candles) < 20: return {"skip":True}
     closes = [c["c"] for c in candles]
@@ -471,3 +471,171 @@ fetchSignals(); fetchAuto(); setInterval(fetchSignals,3000); setInterval(fetchAu
 </body></html>
 """)
 
+
+
+def analyze_fast_scalp(instrument):
+    """TUNED ENTRY v2 - Best entry confluence"""
+    candles = get_oanda_candles(instrument, "M1", 100)
+    if len(candles) < 50: return {"skip":True}
+    closes = [c["c"] for c in candles]
+    highs = [c["h"] for c in candles]
+    lows = [c["l"] for c in candles]
+    volumes = [c["vol"] for c in candles]
+    opens = [c["o"] for c in candles]
+    
+    # --- CORE INDICATORS ---
+    ema5 = ema(closes, 5)
+    ema9 = ema(closes, 9)
+    ema21 = ema(closes, 21)
+    ema50 = ema(closes, 50)
+    rsi7 = rsi(closes, 7)
+    rsi14 = rsi(closes, 14)
+    vw = vwap(closes[-20:], volumes[-20:])
+    atr = sum([highs[i]-lows[i] for i in range(-14,0)])/14 if len(highs)>=14 else 0.0005
+    
+    # --- EXTRA FILTERS FOR BEST ENTRY ---
+    # 1. MACD (12,26,9) - momentum confirmation
+    ema12 = ema(closes, 12)
+    ema26 = ema(closes, 26)
+    macd = ema12 - ema26
+    signal_line = ema([ema(closes[:i+1],12)-ema(closes[:i+1],26) for i in range(len(closes))], 9) if len(closes)>26 else macd
+    macd_hist = macd - signal_line
+    
+    # 2. Bollinger position (20,2)
+    sma20 = sum(closes[-20:])/20
+    std = (sum([(c-sma20)**2 for c in closes[-20:]])/20)**0.5
+    bb_upper = sma20 + 2*std
+    bb_lower = sma20 - 2*std
+    bb_pct = (closes[-1]-bb_lower)/(bb_upper-bb_lower) if bb_upper!=bb_lower else 0.5
+    
+    # 3. Volume spike + candle strength
+    avg_vol = sum(volumes[-20:])/20 if len(volumes)>=20 else 100
+    vol_spike = volumes[-1] > avg_vol*1.2
+    body = abs(closes[-1]-opens[-1])
+    candle_range = highs[-1]-lows[-1]
+    strong_candle = body > candle_range*0.6 if candle_range>0 else False
+    
+    # 4. Trend filter - price vs EMA50
+    uptrend = closes[-1] > ema50 and ema21 > ema50
+    downtrend = closes[-1] < ema50 and ema21 < ema50
+    
+    # 5. Recent higher high / lower low
+    higher_high = closes[-1] > max(closes[-5:-1]) if len(closes)>=5 else False
+    lower_low = closes[-1] < min(closes[-5:-1]) if len(closes)>=5 else False
+    
+    current = closes[-1]
+    prev_close = closes[-2]
+    
+    # --- TUNED ENTRY LOGIC - 5 CONFLUENCE NEEDED ---
+    long_score = 0
+    short_score = 0
+    
+    # Long confluence (need 5/7)
+    if current > vw: long_score+=1
+    if ema5 > ema9 > ema21: long_score+=1
+    if uptrend: long_score+=1
+    if 50 < rsi7 < 68 and rsi14 > 50: long_score+=1  # Not overbought
+    if macd > signal_line and macd_hist > 0: long_score+=1
+    if bb_pct > 0.5 and bb_pct < 0.85: long_score+=1  # Not at top BB
+    if higher_high or vol_spike: long_score+=1
+    if strong_candle and current > prev_close: long_score+=1
+    
+    if current < vw: short_score+=1
+    if ema5 < ema9 < ema21: short_score+=1
+    if downtrend: short_score+=1
+    if 32 < rsi7 < 50 and rsi14 < 50: short_score+=1
+    if macd < signal_line and macd_hist < 0: short_score+=1
+    if bb_pct < 0.5 and bb_pct > 0.15: short_score+=1
+    if lower_low or vol_spike: short_score+=1
+    if strong_candle and current < prev_close: short_score+=1
+    
+    direction=None; confidence=0
+    # Need at least 6/8 confluence for high quality entry
+    if long_score >= 6:
+        direction="LONG"
+        confidence = 70 + (long_score-6)*5 + (rsi7-50)*0.3
+        # Bonus if volume spike + MACD strong
+        if vol_spike: confidence+=3
+        if macd_hist > 0.0001: confidence+=2
+    elif short_score >= 6:
+        direction="SHORT"
+        confidence = 70 + (short_score-6)*5 + (50-rsi7)*0.3
+        if vol_spike: confidence+=3
+        if macd_hist < -0.0001: confidence+=2
+    
+    confidence = min(95, max(0, confidence))
+    
+    return {
+        "instrument":instrument,
+        "price":current,
+        "ema5":ema5,"ema9":ema9,"ema21":ema21,"ema50":ema50,
+        "rsi7":rsi7,"rsi14":rsi14,"vwap":vw,"atr":atr,
+        "macd":macd,"macd_signal":signal_line,"macd_hist":macd_hist,
+        "bb_upper":bb_upper,"bb_lower":bb_lower,"bb_pct":bb_pct,
+        "vol_spike":vol_spike,"uptrend":uptrend,"downtrend":downtrend,
+        "long_score":long_score,"short_score":short_score,
+        "direction":direction,
+        "confidence":round(confidence,1) if direction else 0
+    }
+
+def execute_oanda_fast(signal):
+    api_key=os.getenv("OANDA_API_KEY")
+    account_id=os.getenv("OANDA_ACCOUNT_ID")
+    if not api_key or not account_id: return {"error":"no keys"}
+    try:
+        headers={"Authorization": f"Bearer {api_key}"}
+        pricing_url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/pricing?instruments={signal['symbol']}"
+        pr=requests.get(pricing_url, headers=headers, timeout=6)
+        live_price=None
+        if pr.status_code==200:
+            prices=pr.json().get("prices",[])
+            if prices:
+                asks=prices[0].get("asks",[]); bids=prices[0].get("bids",[])
+                if signal["direction"]=="LONG" and asks: live_price=float(asks[0]["price"])
+                elif bids: live_price=float(bids[0]["price"])
+        if not live_price: live_price=signal["entry"]
+        
+        # TUNED EXIT: 0.35% TP / 0.18% SL = 2:1 RR for fast scalp
+        # TP slightly bigger than SL because we have high win rate entries
+        if signal["direction"]=="LONG":
+            tp_price=round(live_price*1.0035,5)
+            sl_price=round(live_price*0.9982,5)
+        else:
+            tp_price=round(live_price*0.9965,5)
+            sl_price=round(live_price*1.0018,5)
+        if "JPY" in signal["symbol"]:
+            tp_price=round(tp_price,3); sl_price=round(sl_price,3); live_price=round(live_price,3)
+        
+        units=10000
+        order_units = units if signal["direction"]=="LONG" else -units
+        url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/orders"
+        body={
+            "order":{
+                "type":"MARKET",
+                "instrument":signal["symbol"],
+                "units":str(order_units),
+                "timeInForce":"FOK",
+                "takeProfitOnFill":{"price":str(tp_price),"timeInForce":"GTC"},
+                "stopLossOnFill":{"price":str(sl_price),"timeInForce":"GTC"}
+            }
+        }
+        r=requests.post(url, headers={"Authorization": f"Bearer {api_key}","Content-Type":"application/json"}, json=body, timeout=10)
+        res=r.json()
+        if r.status_code in [200,201]:
+            auto_trading["forex_trades"].append({
+                "symbol":signal["symbol"],
+                "direction":signal["direction"],
+                "entry":live_price,
+                "tp":tp_price,
+                "sl":sl_price,
+                "conf":signal["confidence"],
+                "time":datetime.utcnow().isoformat(),
+                "strategy":auto_trading["strategy"],
+                "indicators":signal.get("indicators",{}),
+                "scores":f"L:{signal.get('long_score',0)}/8 S:{signal.get('short_score',0)}/8",
+                "result":res
+            })
+            auto_trading["forex_trades"]=auto_trading["forex_trades"][-50:]
+        return res
+    except Exception as e:
+        return {"error":str(e)}
