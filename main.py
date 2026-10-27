@@ -35,7 +35,7 @@ forex_symbols = ["EUR_USD","GBP_USD","USD_JPY","AUD_USD","GBP_JPY","AUD_USD"]
 auto_trading={
     "stocks_enabled": True,
     "forex_enabled": True,
-    "min_confidence": 70,
+    "min_confidence": 76,
     "risk_pct": 0.5,
     "capital": 10000,
     "stocks_trades": [],
@@ -417,7 +417,7 @@ def force_enable():
     auto_trading["forex_enabled"]=True
     auto_trading["min_confidence"]=75
     auto_trading["risk_pct"]=0.5
-    return {"forced":True,"forex_enabled":True,"min_confidence":75,"message":"Forex AUTO forced ON 75% - next scan will trade"}
+    return {"forced":True,"forex_enabled":True,"min_confidence": 76,"message":"Forex AUTO forced ON 75% - next scan will trade"}
 
 
 @app.get("/", response_class=HTMLResponse)
