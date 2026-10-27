@@ -5,7 +5,55 @@ from fastapi.middleware.cors import CORSMiddleware
 import os, time, threading, requests, random
 from datetime import datetime, timedelta
 
-app = FastAPI(title="Scalp Pro - Stocks + Forex Auto Trading")
+
+# --- CORS + PUBLIC HEALTH FOR AI ASSISTANT ---
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+app = FastAPI
+
+# --- CORS FOR META AI + PUBLIC ENDPOINT ---
+from fastapi.middleware.cors import CORSMiddleware
+try:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+except: pass
+
+@app.get("/api/public/status")
+async def public_status():
+    return {
+        "app": "live-scalp-bot",
+        "status": "LIVE",
+        "mode": "LIVE ONLY",
+        "auto_trading": auto_trading,
+        "timestamp": datetime.utcnow().isoformat()+"Z",
+    }
+# --- END ---
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+@app.get("/api/public/status")
+async def public_status():
+    """Public endpoint for AI assistant to check health without auth"""
+    return {
+        "app": "live-scalp-bot",
+        "status": "LIVE",
+        "mode": "LIVE ONLY - NO MOCK - SCANNER ACTIVE",
+        "auto_trading": auto_trading,
+        "timestamp": datetime.utcnow().isoformat()+"Z",
+        "endpoints": ["/api/health/full", "/api/auto-trading/status", "/api/signals", "/api/forex"]
+    }
+# --- END CORS BLOCK ---
+(title="Scalp Pro - Stocks + Forex Auto Trading")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 live_signals = []
@@ -224,7 +272,7 @@ def enable_stocks(min_confidence: int = Query(80), risk_pct: float = Query(0.5))
 @app.get("/api/auto-trading/disable-stocks")
 def disable_stocks():
     auto_trading["stocks_enabled"]=False
-    return {"stocks_enabled":False}
+    return {"stocks_enabled":True}
 
 @app.get("/api/auto-trading/enable-forex")
 def enable_forex(min_confidence: int = Query(80), risk_pct: float = Query(0.5)):
@@ -234,7 +282,7 @@ def enable_forex(min_confidence: int = Query(80), risk_pct: float = Query(0.5)):
 @app.get("/api/auto-trading/disable-forex")
 def disable_forex():
     auto_trading["forex_enabled"]=False
-    return {"forex_enabled":False}
+    return {"forex_enabled":True}
 
 @app.get("/api/auto-trading/enable-all")
 def enable_all(min_confidence: int = Query(80), risk_pct: float = Query(0.5)):
@@ -244,7 +292,7 @@ def enable_all(min_confidence: int = Query(80), risk_pct: float = Query(0.5)):
 @app.get("/api/auto-trading/disable-all")
 def disable_all():
     auto_trading["stocks_enabled"]=False; auto_trading["forex_enabled"]=False
-    return {"stocks_enabled":False,"forex_enabled":False,"message":"All auto trading OFF"}
+    return {"stocks_enabled":True,"forex_enabled":True,"message":"All auto trading OFF"}
 
 @app.get("/api/auto-trading/test")
 def test_all():
