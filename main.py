@@ -40,10 +40,10 @@ auto_trading={
     "capital": 10000,
     "stocks_trades": [],
     "forex_trades": [],
-    "strategy": "FAST SCALP EMA5/9 + VWAP + RSI7",
-    "tp_pct": 0.3,
-    "sl_pct": 0.2,
-    "max_hold_sec": 90
+    "strategy": "ULTRA FAST 0.23%/0.10% + Time Stop + BE",
+    "tp_pct": 0.23,
+    "sl_pct": 0.10,
+    "max_hold_sec": 180
 }
 
 # --- FAST SCALP INDICATORS - EMA5/9 + VWAP + RSI7 ---
@@ -284,6 +284,84 @@ def scanner_loop():
 
 @app.on_event("startup")
 def start(): threading.Thread(target=scanner_loop, daemon=True).start()
+
+# --- ULTRA FAST MANAGER: Time Stop + Break-Even Protection ---
+def manage_open_trades():
+    """Close trades that are open too long or protect green trades"""
+    api_key=os.getenv("OANDA_API_KEY")
+    account_id=os.getenv("OANDA_ACCOUNT_ID")
+    if not api_key or not account_id: return
+    try:
+        headers={"Authorization": f"Bearer {api_key}"}
+        # Get open trades
+        url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/openTrades"
+        r=requests.get(url, headers=headers, timeout=8)
+        if r.status_code!=200: return
+        trades=r.json().get("trades",[])
+        for tr in trades:
+            open_time_str=tr.get("openTime")
+            if not open_time_str: continue
+            from dateutil import parser as date_parser
+            try:
+                open_time=date_parser.parse(open_time_str)
+                now=datetime.now(open_time.tzinfo)
+                age_sec=(now-open_time).total_seconds()
+            except:
+                continue
+            unrealized=float(tr.get("unrealizedPL",0))
+            trade_id=tr.get("id")
+            instrument=tr.get("instrument")
+            # Get current price
+            current_price=float(tr.get("price",0))
+            initial_units=float(tr.get("initialUnits",0))
+            # 1. Break-even at +0.12% profit
+            # Approx: if unrealized > ~$12 on 10k units, move SL to BE
+            if unrealized > 12 and age_sec < 180:
+                # Move SL to break-even via trade client extensions? Simplified: close half or update via order?
+                # For OANDA, we update trade with trailing stop or SL via PUT /trades/{id}/orders
+                # Here we set stopLoss to entry price
+                try:
+                    sl_url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/trades/{trade_id}/orders"
+                    # Get entry price
+                    entry_price=float(tr.get("price",0))
+                    sl_price=entry_price  # BE
+                    body={"takeProfit":{}, "stopLoss": {"price": str(round(sl_price,5)), "timeInForce":"GTC"}}
+                    # OANDA uses PUT to set SL/TP
+                    requests.put(sl_url, headers={**headers,"Content-Type":"application/json"}, json=body, timeout=6)
+                    scan_log.append(f"BE PROTECT {instrument} {trade_id} age {int(age_sec)}s PL ${unrealized:.2f}")
+                except Exception as e:
+                    pass
+            # 2. Time stop: if >180 sec (3 min) and not in profit >0.20%, close
+            if age_sec > 180:
+                if unrealized < 20:  # Not close to TP (TP ~$25)
+                    try:
+                        close_url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/trades/{trade_id}/close"
+                        requests.put(close_url, headers=headers, timeout=6)
+                        scan_log.append(f"TIME STOP CLOSE {instrument} {trade_id} age {int(age_sec)}s PL ${unrealized:.2f}")
+                    except:
+                        pass
+            # 3. Hard stop: >300 sec (5 min) force close regardless
+            if age_sec > 300:
+                try:
+                    close_url=f"https://api-fxpractice.oanda.com/v3/accounts/{account_id}/trades/{trade_id}/close"
+                    requests.put(close_url, headers=headers, timeout=6)
+                    scan_log.append(f"HARD STOP 5MIN CLOSE {instrument} {trade_id} PL ${unrealized:.2f}")
+                except:
+                    pass
+    except Exception as e:
+        scan_log.append(f"Manage error: {e}")
+
+def manager_loop():
+    while True:
+        try:
+            manage_open_trades()
+        except:
+            pass
+        time.sleep(10)  # Check every 10 sec
+
+# Start manager thread
+threading.Thread(target=manager_loop, daemon=True).start()
+
 
 @app.get("/health")
 def health(): return {"status":"live","signals":len(live_signals),"auto":auto_trading}
@@ -598,11 +676,11 @@ def execute_oanda_fast(signal):
         # TUNED EXIT: 0.35% TP / 0.18% SL = 2:1 RR for fast scalp
         # TP slightly bigger than SL because we have high win rate entries
         if signal["direction"]=="LONG":
-            tp_price=round(live_price*1.0035,5)
-            sl_price=round(live_price*0.9982,5)
+            tp_price=round(live_price*1.0023,5)
+            sl_price=round(live_price*0.9990,5)
         else:
-            tp_price=round(live_price*0.9965,5)
-            sl_price=round(live_price*1.0018,5)
+            tp_price=round(live_price*0.9977,5)
+            sl_price=round(live_price*1.0010,5)
         if "JPY" in signal["symbol"]:
             tp_price=round(tp_price,3); sl_price=round(sl_price,3); live_price=round(live_price,3)
         
